@@ -5,6 +5,7 @@ from datetime import datetime
 
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 SENT_DEALS_FILE = "sent_deals.json"
+PINGME_ROLE_ID = "1478500037955948624" 
 
 STORE_NAMES = {
     "1": "Steam",
@@ -84,7 +85,12 @@ if to_notify and WEBHOOK_URL:
         })
 
     for i in range(0, len(embeds), 10):
-        requests.post(WEBHOOK_URL, json={"embeds": embeds[i:i+10]})
+        payload = {"embeds": embeds[i:i+10]}
+        
+        if i == 0 and PINGME_ROLE_ID != "YOUR_ROLE_ID_HERE":
+            payload["content"] = f"<@&{PINGME_ROLE_ID}> New AAA Deals Detected!"
+            
+        requests.post(WEBHOOK_URL, json=payload)
 
     new_history = list(set(already_sent + [d["dealID"] for d in to_notify]))
     save_sent_deals(new_history[-300:])

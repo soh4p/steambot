@@ -1,36 +1,37 @@
-name: Steam Deal Bot
+name: Hourly Deal Checker
 
 on:
   schedule:
     - cron: '0 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: 
 
 jobs:
-  run-bot:
+  check-deals:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write 
+    
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Python Setup
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: pip install requests
 
-      - name: Run Script
+      - name: Run checker
         env:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
         run: python main.py
 
-      - name: Save History
+      - name: Save history
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add sent_deals.json
-          git commit -m "Update deal history" || exit 0
+          git commit -m "Update deal history [skip ci]" || exit 0
           git push

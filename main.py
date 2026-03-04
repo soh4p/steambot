@@ -1,30 +1,20 @@
-import requests
-import os
-import json
+import requests, os, json, time
 from datetime import datetime
 
 
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-SENT_DEALS_FILE = "sent_deals.json"
-PINGME_ROLE_ID = "1478500037955948624" 
+WEBHOOK = os.getenv('WEBHOOK_URL')
+DB_FILE = "sent_deals.json"
+ROLE_ID = "1478500037955948624"
+STORES = {"1": "Steam", "7": "GOG", "25": "Epic"}
 
-STORE_NAMES = {
-    "1": "Steam",
-    "7": "GOG",
-    "25": "Epic Games Store"
-}
-
-def get_gbp_rate():
-    """Fetch real-time USD to GBP exchange rate."""
+def get_rate():
     try:
-        r = requests.get("https://open.er-api.com/v6/latest/USD")
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10)
         return r.json()["rates"].get("GBP", 0.78)
     except:
         return 0.78
 
-def get_deals():
-    """Fetch deals specifically for Steam, GOG, and Epic."""
-    url = "https://www.cheapshark.com/api/1.0/deals"
+def fetch_deals():
     params = {
         "storeID": "1,7,25",
         "upperPrice": "50",
@@ -34,85 +24,68 @@ def get_deals():
         "onSale": "1",
         "AAA": "1"
     }
-    resp = requests.get(url, params=params)
-    return resp.json() if resp.status_code == 200 else []
-
-def get_already_sent():
-    """Load history of sent deals to avoid duplicates."""
-    if os.path.exists(SENT_DEALS_FILE):
-        with open(SENT_DEALS_FILE, 'r') as f:
-            try: 
-                return json.load(f)
-            except: 
-                return []
-    return []
-
-def save_sent_deals(deal_ids):
-    """Save updated deal history (limited to last 300)."""
-    with open(SENT_DEALS_FILE, 'w') as f:
-        json.dump(deal_ids[-300:], f, indent=4)
+    try:
+        r = requests.get("https://www.cheapshark.com/api/1.0/deals", params=params, timeout=15)
+        return r.json() if r.status_code == 200 else []
+    except:
+        return []
 
 
-rate = get_gbp_rate()
-deals = get_deals()
-already_sent = get_already_sent()
+history = []
+if os.path.exists(DB_FILE):
+    with open(DB_FILE, 'r') as f:
+        try: history = json.load(f)
+        except: pass
 
-to_notify = []
+fx = get_rate()
+deals = fetch_deals()
+new_items = []
+
 for d in deals:
-    if d["dealID"] not in already_sent:
-       
-        if float(d["savings"]) >= 70 or float(d["salePrice"]) == 0:
-            to_notify.append(d)
-
-if to_notify and WEBHOOK_URL:
-    embeds = []
-    for deal in to_notify:
-        price_gbp = float(deal['salePrice']) * rate
-        orig_gbp = float(deal['normalPrice']) * rate
-        store_id = deal.get('storeID')
-        store_name = STORE_NAMES.get(store_id, "Retailer")
+    if d['dealID'] not in history:
         
-        price_text = f"£{price_gbp:.2f}" if price_gbp > 0 else "FREE"
-        url = f"https://www.cheapshark.com/redirect?dealID={deal['dealID']}"
-        thumb = deal.get('thumb')
+        if float(d['savings']) >= 70 or float(d['salePrice']) == 0:
+            new_items.append(d)
+
+if new_items and WEBHOOK:
+    embeds = []
+    for d in new_items:
+        now_p = float(d['salePrice']) * fx
+        old_p = float(d['normalPrice']) * fx
+        tag = f"£{now_p:.2f}" if now_p > 0 else "FREE"
 
         embeds.append({
-            "title": f"🎁 {deal['title']}",
-            "url": url,
-            "description": f"Available on **{store_name}**",
-            "color": 0x00ff00 if price_gbp == 0 else 0xffd700,
-            "thumbnail": {"url": thumb},
+            "title": f"🎁 {d['title']}",
+            "url": f"https://www.cheapshark.com/redirect?dealID={d['dealID']}",
+            "description": f"On **{STORES.get(d['storeID'], 'Store')}**",
+            "color": 0x00ff00 if now_p == 0 else 0xffd700,
+            "thumbnail": {"url": d.get('thumb')},
             "fields": [
-                {"name": "Sale Price", "value": f"**{price_text}**", "inline": True},
-                {"name": "Discount", "value": f"{round(float(deal['savings']))}% OFF", "inline": True},
-                {"name": "RRP (GBP)", "value": f"£{orig_gbp:.2f}", "inline": True}
+                {"name": "Price", "value": f"**{tag}**", "inline": True},
+                {"name": "Off", "value": f"{round(float(d['savings']))}%", "inline": True},
+                {"name": "RRP", "value": f"£{old_p:.2f}", "inline": True}
             ],
-            "footer": {"text": f"Global Game Tracker | GBP Rate: {rate:.2f}"}
+            "footer": {"text": f"Rate: {fx:.2f}"}
         })
 
    
     for i in range(0, len(embeds), 10):
         payload = {"embeds": embeds[i:i+10]}
-        
-       
         if i == 0:
-            payload["content"] = f"<@&{PINGME_ROLE_ID}> New AAA Deals Detected!"
-            
-        requests.post(WEBHOOK_URL, json=payload)
+            payload["content"] = f"<@&{ROLE_ID}> New AAA Deals!"
+        
+        requests.post(WEBHOOK, json=payload, timeout=10)
+        time.sleep(1) 
 
     
-    new_history = list(set(already_sent + [d["dealID"] for d in to_notify]))
-    save_sent_deals(new_history)
-    print(f"Success: Sent {len(to_notify)} deals.")
+    history = list(set(history + [x['dealID'] for x in new_items]))[-500:]
+    with open(DB_FILE, 'w') as f:
+        json.dump(history, f, indent=4)
+    print(f"Sent {len(new_items)} deals.")
 
-elif WEBHOOK_URL:
-   
-    now = datetime.now().strftime("%H:%M")
-    payload = {
-        "embeds": [{
-            "description": f"🔍 Scan complete at **{now}**. No new AAA deals found on Steam, GOG, or Epic.",
-            "color": 0x2b2d31 
-        }]
-    }
-    requests.post(WEBHOOK_URL, json=payload)
-    print("Logged: No new deals found.")
+elif WEBHOOK:
+    
+    ts = datetime.now().strftime('%H:%M')
+    requests.post(WEBHOOK, json={
+        "embeds": [{"description": f"🔍 Scan complete at {ts}. No new deals.", "color": 0x2b2d31}]
+    }, timeout=10)
